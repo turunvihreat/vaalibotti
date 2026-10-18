@@ -1,0 +1,9 @@
+**
+!requirements.txt
+!ev27/
+!ev27/**
+**/__pycache__/
+**/*.pyc
+**/.env
+**/.git/
+**/data/

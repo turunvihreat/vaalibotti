@@ -1,0 +1,14 @@
+services:
+  ev27:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      EV27_DATABASE: /data/ev27.sqlite3
+    volumes:
+      - ev27-data:/data
+    restart: unless-stopped
+    init: true
+volumes:
+  ev27-data:
