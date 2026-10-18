@@ -15,6 +15,7 @@ from sqlalchemy.engine import make_url
 
 from ev27.config import Config
 from ev27.store import Store, StoreIntegrityError
+from ev27.mysql import schema_for
 import test_core
 from test_core import event
 
@@ -189,3 +190,17 @@ class MySQLCalendarTests(test_core.CalendarIntegrationTests):
         for candidate in (1, 2):
             self.store.appoint(candidate, 3)
             self.store.accept(candidate, 3)
+
+
+class CollationTests(unittest.TestCase):
+    def test_mariadb_uses_its_binary_no_pad_collation(self):
+        statements = schema_for({'utf8mb4_bin', 'utf8mb4_nopad_bin'})
+        self.assertTrue(all(sql.endswith('COLLATE=utf8mb4_nopad_bin') for sql in statements))
+
+    def test_mysql_uses_its_binary_no_pad_collation(self):
+        statements = schema_for({'utf8mb4_bin', 'utf8mb4_0900_bin'})
+        self.assertTrue(all(sql.endswith('COLLATE=utf8mb4_0900_bin') for sql in statements))
+
+    def test_unsupported_server_does_not_silently_merge_identifiers(self):
+        with self.assertRaisesRegex(ValueError, 'NO PAD'):
+            schema_for({'utf8mb4_bin'})

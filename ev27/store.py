@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError as SQLAlchemyIntegrityError
 
-from .mysql import SCHEMA
+from .mysql import schema_for
 
 
 class StoreIntegrityError(Exception):
@@ -31,7 +31,9 @@ class Store:
             )
             try:
                 with self.engine.begin() as connection:
-                    for statement in SCHEMA:
+                    collations = {row[0] for row in connection.exec_driver_sql(
+                        "SHOW COLLATION WHERE Collation IN ('utf8mb4_0900_bin','utf8mb4_nopad_bin')")}
+                    for statement in schema_for(collations):
                         connection.exec_driver_sql(statement)
             except Exception:
                 self.engine.dispose()

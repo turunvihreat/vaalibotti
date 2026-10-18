@@ -1,4 +1,4 @@
-"""MySQL 8 schema, kept separate from the existing SQLite schema.
+"""MySQL/MariaDB schema, kept separate from the existing SQLite schema.
 
 A nullable generated column provides SQLite's partial unique index semantics:
 only pending operations reserve an event/candidate pair. Terminal history can
@@ -39,5 +39,12 @@ _TABLES = (
         actor BIGINT, action VARCHAR(100) NOT NULL, details LONGTEXT NOT NULL)''',
 )
 
-SCHEMA = tuple(statement + ' ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin'
-               for statement in _TABLES)
+def schema_for(collations):
+    # MySQL 8 and MariaDB use different names for binary NO PAD collations.
+    # NO PAD is essential: event IDs differing by trailing spaces must stay distinct.
+    collation = next((name for name in ('utf8mb4_0900_bin', 'utf8mb4_nopad_bin')
+                      if name in collations), None)
+    if collation is None:
+        raise ValueError('Database requires a binary NO PAD utf8mb4 collation; use MySQL 8 or MariaDB 10.2+')
+    return tuple(statement + ' ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=' + collation
+                 for statement in _TABLES)

@@ -68,10 +68,11 @@ Set an organisational retention policy and delete campaign data when no longer n
 
 ## MySQL deployment
 
-MySQL 8.0+ is supported alongside SQLite. Create a dedicated EV27 database and
+MySQL 8.0+ and MariaDB 10.2+ are supported alongside SQLite. Create a dedicated EV27 database and
 account on your existing MySQL server; do not point EV27 at tapahtumabotti's
 schema. The account needs SELECT, INSERT, UPDATE, DELETE and CREATE privileges
-on the EV27 database. Tables and indexes are created automatically at startup.
+on the EV27 database. Tables and indexes are created automatically at startup. The bot detects the
+server’s binary NO PAD collation to preserve exact, case-sensitive identifiers.
 
 Set the following secret environment variable on the EV27 container (or in the
 repository-root `.env` for local use):
@@ -202,7 +203,7 @@ This deliberate recovery step prevents duplicate election announcements.
 
 The suite uses temporary databases, Discord doubles and a local in-memory calendar
 HTTP fixture. CI also runs the persistence and calendar integration tests against
-MySQL 8.0. To run these locally, provide a disposable MySQL server and a test account
+MySQL 8.0 and MariaDB 10.11. To run these locally, provide a disposable MySQL server and a test account
 with CREATE/DROP DATABASE privileges:
 
 ```sh

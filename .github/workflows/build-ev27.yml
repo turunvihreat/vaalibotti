@@ -18,16 +18,19 @@ jobs:
     name: Test EV27 bot
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      matrix:
+        database: [mysql:8.0, mariadb:10.11]
     services:
       mysql:
-        image: mysql:8.0
+        image: ${{ matrix.database }}
         env:
           MYSQL_ROOT_PASSWORD: ev27-ci-only
           MYSQL_ROOT_HOST: '%'
         ports:
           - 3306:3306
         options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -pev27-ci-only"
+          --health-cmd="sh -c 'if command -v mariadb-admin >/dev/null; then mariadb-admin ping -h 127.0.0.1 -pev27-ci-only; else mysqladmin ping -h 127.0.0.1 -pev27-ci-only; fi'"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=12
