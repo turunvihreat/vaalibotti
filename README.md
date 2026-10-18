@@ -58,11 +58,47 @@ docker compose up --build -d
 ```
 
 The Docker build excludes secrets, the shared bot and local databases. The named
-volume persists `/data`. Run **one replica only** per Discord application/database.
+volume persists `/data` when using SQLite. MySQL stores all state on the database
+server and does not require a local database volume. Run **one replica only** per
+Discord application/database.
 Stop the service before copying its SQLite database for backups (include the WAL
 and SHM files if copying a live database). Protect database backups and environment
 files: they contain identities, appointments, participation history and credentials.
 Set an organisational retention policy and delete campaign data when no longer needed.
+
+## MySQL deployment
+
+MySQL 8.0+ is supported alongside SQLite. Create a dedicated EV27 database and
+account on your existing MySQL server; do not point EV27 at tapahtumabotti's
+schema. The account needs SELECT, INSERT, UPDATE, DELETE and CREATE privileges
+on the EV27 database. Tables and indexes are created automatically at startup.
+
+Set the following secret environment variable on the EV27 container (or in the
+repository-root `.env` for local use):
+
+```dotenv
+EV27_DATABASE_URL=mysql+pymysql://ev27_user:URL_ENCODED_PASSWORD@mysql-host:3306/ev27?charset=utf8mb4
+```
+
+`EV27_DATABASE_URL` takes precedence over `EV27_DATABASE`, which remains the
+SQLite path setting. A MySQL URL in `EV27_DATABASE` is also accepted. The shared
+bot's `DATABASE_URL` is never read. Percent-encode special characters in the
+username/password, including `@`, `:`, `/`, `#` and `%`. For servers requiring TLS,
+append `&ssl_ca=/path/to/ca.pem&ssl_verify_cert=true&ssl_verify_identity=true` and
+make the CA file available inside the container. The hostname must match the
+server certificate. Configure the EV27 container's network access to MySQL.
+
+In an ACI YAML deployment, add this to EV27's `environmentVariables`:
+
+```yaml
+- name: EV27_DATABASE_URL
+  secureValue: "<EV27 MySQL connection URL supplied at deployment>"
+```
+
+Keep actual credentials out of committed deployment files. Rebuild the image to
+include the MySQL driver before deploying this setting. Use your MySQL backup
+policy for the EV27 database. Existing SQLite data is not automatically migrated;
+switching backends starts with a separate database.
 
 ## GitHub image builds
 
@@ -75,7 +111,7 @@ credentials are needed for the build.
 
 For this repository the image is
 `ghcr.io/turunvihreat/vaalibotti-ev27:latest`. Use the SHA tag to select
-a commit-specific build for Azure Container Apps. Add it as a second container
+a commit-specific build for Azure Container Instances. Add it as a second container
 alongside tapahtumabotti, with separate EV27 environment variables, secrets and
 persistent database storage. Configure registry pull access in Azure if the GHCR
 package is private. The workflow builds/publishes images only; it does not change
@@ -154,8 +190,8 @@ Inspect logs and `/ek27 tila`; unexpected pending operations need calendar-side 
 Card publication is also claimed before transmission. If Discord times out after
 possibly accepting a message, the event has `message_id=-1` and is not automatically
 reposted. Stop the bot, inspect the channel for a card with footer `EV27 · <event ID>`,
-and use SQLite to set that event's `message_id` to the existing message ID. If no card
-was delivered, set it to NULL to permit a new publication. Restart afterwards.
+and use your database client to set that event's `message_id` to the existing
+message ID. If no card was delivered, set it to NULL to permit a new publication. Restart afterwards.
 This deliberate recovery step prevents duplicate election announcements.
 
 ## Verification
@@ -165,7 +201,17 @@ This deliberate recovery step prevents duplicate election announcements.
 ```
 
 The suite uses temporary databases, Discord doubles and a local in-memory calendar
-HTTP fixture. No real Discord or calendar credentials are needed. Before production,
-verify role hierarchy and effective channel permissions with candidate, manager,
+HTTP fixture. CI also runs the persistence and calendar integration tests against
+MySQL 8.0. To run these locally, provide a disposable MySQL server and a test account
+with CREATE/DROP DATABASE privileges:
+
+```sh
+EV27_TEST_MYSQL_URL='mysql+pymysql://test_user:password@127.0.0.1:3306/ev27_test' \
+  .venv/bin/python -m unittest discover -s tests -v
+```
+
+Each MySQL test creates and drops its own randomly named `ev27_test_*` database.
+Without this variable, MySQL tests are skipped and the SQLite suite still runs.
+No real Discord or calendar credentials are needed. Before production, verify role hierarchy and effective channel permissions with candidate, manager,
 ordinary campaign member and panel-group accounts; test against the real staging
 calendar before enabling live participant registration.

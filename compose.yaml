@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile
     env_file: .env
     environment:
+      # EV27_DATABASE_URL from .env takes precedence when using MySQL.
       EV27_DATABASE: /data/ev27.sqlite3
     volumes:
       - ev27-data:/data

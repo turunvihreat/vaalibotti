@@ -57,5 +57,6 @@ class Config:
             raise ValueError('Poll interval must be at least 15 seconds')
         return cls(required('TOKEN'), *ids, required('DISTRICT'),
                    os.environ.get('EV27_CAMPAIGN', 'EV27'),
+                   os.environ.get('EV27_DATABASE_URL', '').strip() or
                    os.environ.get('EV27_DATABASE', 'data/ev27.sqlite3'),
                    url, key, enabled, registration, poll)

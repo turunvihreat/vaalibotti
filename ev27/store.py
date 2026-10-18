@@ -1,12 +1,42 @@
-"""Small, isolated SQLite store. One bot process owns each database."""
+"""Isolated SQLite/MySQL store. One bot process owns each database."""
 import json
 from pathlib import Path
 import sqlite3
 import uuid
 
+from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import IntegrityError as SQLAlchemyIntegrityError
+
+from .mysql import SCHEMA
+
+
+class StoreIntegrityError(Exception):
+    """A database uniqueness or integrity constraint was violated."""
+
 
 class Store:
     def __init__(self, path):
+        self.engine = None
+        if '://' in path:
+            url = make_url(path)
+            if url.drivername not in {'mysql', 'mysql+pymysql'} or not url.database:
+                raise ValueError('Use a SQLite path or mysql+pymysql URL with a database name')
+            url = url.set(drivername='mysql+pymysql')
+            if 'charset' not in url.query:
+                url = url.update_query_dict({'charset': 'utf8mb4'})
+            self.engine = create_engine(
+                url, pool_pre_ping=True, pool_recycle=1800, hide_parameters=True,
+                connect_args={'connect_timeout': 10, 'read_timeout': 15, 'write_timeout': 15},
+            )
+            try:
+                with self.engine.begin() as connection:
+                    for statement in SCHEMA:
+                        connection.exec_driver_sql(statement)
+            except Exception:
+                self.engine.dispose()
+                raise
+            return
         if path != ':memory:':
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(path)
@@ -44,23 +74,38 @@ class Store:
 
     def bind_guild(self, guild_id):
         value = str(guild_id)
-        self.execute("INSERT OR IGNORE INTO metadata VALUES('guild_id',?)", (value,))
-        stored = self.rows("SELECT value FROM metadata WHERE key='guild_id'")[0]['value']
+        self.execute("INSERT IGNORE INTO metadata VALUES('guild_id',?)" if self.engine else
+                     "INSERT OR IGNORE INTO metadata VALUES('guild_id',?)", (value,))
+        stored = self.rows("SELECT value FROM metadata WHERE `key`='guild_id'")[0]['value']
         if stored != value:
             raise ValueError('This EV27 database belongs to another Discord server')
 
     def rows(self, query, args=()):
+        if self.engine:
+            with self.engine.connect() as connection:
+                return [dict(row) for row in connection.exec_driver_sql(
+                    query.replace('?', '%s'), tuple(args)).mappings()]
         return [dict(row) for row in self.conn.execute(query, args).fetchall()]
 
     def execute(self, query, args=()):
-        with self.conn:
-            return self.conn.execute(query, args)
+        try:
+            if self.engine:
+                with self.engine.begin() as connection:
+                    return connection.exec_driver_sql(query.replace('?', '%s'), tuple(args))
+            with self.conn:
+                return self.conn.execute(query, args)
+        except (sqlite3.IntegrityError, SQLAlchemyIntegrityError) as error:
+            raise StoreIntegrityError('Database constraint violated') from error
 
     def audit(self, actor, action, **details):
         self.execute('INSERT INTO audit(actor,action,details) VALUES(?,?,?)',
                      (actor, action, json.dumps(details, ensure_ascii=False)))
 
     def appoint(self, candidate, manager):
+        if self.engine:
+            self.execute("""INSERT INTO appointments(candidate,manager,state) VALUES(?,?,'pending')
+                ON DUPLICATE KEY UPDATE state=IF(state='revoked','pending',state)""", (candidate, manager))
+            return
         self.execute('''INSERT INTO appointments VALUES(?,?,'pending')
             ON CONFLICT(candidate,manager) DO UPDATE SET state='pending'
             WHERE appointments.state='revoked' ''', (candidate, manager))
@@ -73,9 +118,13 @@ class Store:
         if self.state(candidate, manager) != 'pending':
             raise ValueError('Invitation requires a pending appointment')
         token = uuid.uuid4().hex
-        self.execute("""INSERT INTO invitations(token,candidate,manager) VALUES(?,?,?)
-            ON CONFLICT(candidate,manager) DO UPDATE SET token=excluded.token,message_id=NULL""",
-                     (token, candidate, manager))
+        if self.engine:
+            self.execute("""INSERT INTO invitations(token,candidate,manager) VALUES(?,?,?)
+                ON DUPLICATE KEY UPDATE token=?,message_id=NULL""", (token, candidate, manager, token))
+        else:
+            self.execute("""INSERT INTO invitations(token,candidate,manager) VALUES(?,?,?)
+                ON CONFLICT(candidate,manager) DO UPDATE SET token=excluded.token,message_id=NULL""",
+                         (token, candidate, manager))
         return token
 
     def invitation(self, token):
@@ -120,16 +169,27 @@ class Store:
         old = self.identity(member)
         if old and old != calendar_id and self.rows('SELECT id FROM operations WHERE candidate=?', (member,)):
             raise ValueError('Käytettyä kalenteritunnistetta ei voi vaihtaa; korjaa ensin kalenterin tiedot.')
-        self.execute('INSERT INTO identities VALUES(?,?) ON CONFLICT(discord_id) DO UPDATE SET calendar_id=excluded.calendar_id',
-                     (member, calendar_id))
+        if self.engine:
+            if old is None:
+                self.execute('INSERT INTO identities(discord_id,calendar_id) VALUES(?,?)', (member, calendar_id))
+            else:
+                self.execute('UPDATE identities SET calendar_id=? WHERE discord_id=?', (calendar_id, member))
+        else:
+            self.execute('INSERT INTO identities VALUES(?,?) ON CONFLICT(discord_id) DO UPDATE SET calendar_id=excluded.calendar_id',
+                         (member, calendar_id))
 
     def identity(self, member):
         rows = self.rows('SELECT calendar_id FROM identities WHERE discord_id=?', (member,))
         return rows[0]['calendar_id'] if rows else None
 
     def save_event(self, event):
-        self.execute('INSERT INTO events(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
-                     (event['id'], json.dumps(event)))
+        data = json.dumps(event)
+        if self.engine:
+            self.execute('INSERT INTO events(id,data) VALUES(?,?) ON DUPLICATE KEY UPDATE data=?',
+                         (event['id'], data, data))
+        else:
+            self.execute('INSERT INTO events(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
+                         (event['id'], data))
 
     def events(self):
         return self.rows('SELECT * FROM events')
@@ -142,7 +202,8 @@ class Store:
         self.execute('UPDATE events SET message_id=? WHERE id=?', (message_id, event_id))
 
     def claim_reminder(self, event_id, kind):
-        return self.execute('INSERT OR IGNORE INTO reminders VALUES(?,?)', (event_id, kind)).rowcount == 1
+        query = 'INSERT IGNORE INTO reminders VALUES(?,?)' if self.engine else 'INSERT OR IGNORE INTO reminders VALUES(?,?)'
+        return self.execute(query, (event_id, kind)).rowcount == 1
 
     def pending(self, event_id=None, candidate=None):
         if event_id is None:
@@ -166,4 +227,7 @@ class Store:
         self.execute('UPDATE operations SET state=? WHERE id=?', (state, operation))
 
     def close(self):
-        self.conn.close()
+        if self.engine:
+            self.engine.dispose()
+        else:
+            self.conn.close()

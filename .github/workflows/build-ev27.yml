@@ -18,6 +18,21 @@ jobs:
     name: Test EV27 bot
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ev27-ci-only
+          MYSQL_ROOT_HOST: '%'
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pev27-ci-only"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+    env:
+      EV27_TEST_MYSQL_URL: mysql+pymysql://root:ev27-ci-only@127.0.0.1:3306/ev27_test
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

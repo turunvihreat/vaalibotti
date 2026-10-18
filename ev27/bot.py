@@ -7,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
-import sqlite3
 
 import aiohttp
 import discord
@@ -17,7 +16,7 @@ from discord.ext import tasks
 from .calendar import Calendar, CalendarError, can_register, instant
 from .config import Config
 from .service import Service, UserError
-from .store import Store
+from .store import Store, StoreIntegrityError
 
 log = logging.getLogger('ev27')
 
@@ -388,7 +387,7 @@ class EV27Bot(discord.Client):
                     raise UserError('Käyttäjällä ei ole ehdokasroolia.')
                 try:
                     self.store.map_identity(ehdokas.id, kalenteritunniste.strip())
-                except (ValueError, sqlite3.IntegrityError) as error:
+                except (ValueError, StoreIntegrityError) as error:
                     raise UserError(str(error) if isinstance(error, ValueError)
                                     else 'Kalenteritunniste on jo liitetty toiseen käyttäjään.') from error
                 self.store.audit(interaction.user.id, 'identity_mapped', candidate=ehdokas.id)
